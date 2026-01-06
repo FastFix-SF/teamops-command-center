@@ -1,0 +1,453 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// Team Members
+model Member {
+  id                String   @id @default(cuid())
+  name              String
+  email             String   @unique
+  phone             String?  // For SMS notifications
+  role              String
+  timezone          String   @default("EST")
+  checkinFrequency  String   @default("DAILY") // HOURLY, DAILY
+  isActive          Boolean  @default(true)
+  hourlyRate        Float    @default(100)
+  avatarUrl         String?
+  notifyOnOverdue   Boolean  @default(true)
+  notifyOnMeeting   Boolean  @default(true)
+  notifyOnMention   Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // ===== SKILLS & CAPACITY FOR ASSIGNMENT =====
+  skillTags         String?  // Comma-separated: "Sales,Web,AI,Ops,Design,Legal,Finance"
+  seniorityLevel    Int      @default(2) // 1=Junior, 2=Mid, 3=Senior, 4=Lead, 5=Director
+  maxConcurrentTasks Int     @default(5) // Capacity limit
+  isManager         Boolean  @default(false) // Manager flag for summaries
+
+  // ===== MORNING FOCUS PREFERENCES =====
+  morningFocusEnabled Boolean @default(true)
+  morningFocusTime    String  @default("09:00") // HH:MM in their timezone
+  emailSummaryEnabled Boolean @default(false)
+
+  // ===== VIRTUAL OFFICE =====
+  avatarStyle       String   @default("default") // Avatar preset style
+  avatarColor       String   @default("#6366F1") // Primary avatar color
+  avatarAccessories String?  // JSON: accessories/items the avatar wears
+  deskDecorations   String?  // JSON: desk decoration items
+  officeStatus      String   @default("OFFLINE") // ONLINE, AWAY, BUSY, IN_MEETING, OFFLINE
+  statusMessage     String?  // Custom status message
+  lastSeenAt        DateTime?
+  currentZone       String   @default("desk") // desk, meeting-room, lounge, etc.
+  positionX         Int      @default(0) // X position in office
+  positionY         Int      @default(0) // Y position in office
+
+  tasks             Task[]
+  timeEntries       TimeEntry[]
+  meetingResponses  MeetingResponse[]
+  meetingsCreated   Meeting[]
+  monthlyReports    MonthlyReport[]
+  notifications     Notification[]
+  sentNotifications Notification[]    @relation("SentBy")
+  aiCheckins        AICheckin[]
+  jarvisConversations JarvisConversation[]
+  dailySummaries    DailySummary[]
+  pinnedFocusItems  PinnedFocusItem[]
+  workspot          Workspot?
+  officeMessages    OfficeMessage[]   @relation("SentMessages")
+  receivedMessages  OfficeMessage[]   @relation("ReceivedMessages")
+}
+
+// Tasks
+model Task {
+  id              String   @id @default(cuid())
+  title           String
+  description     String?
+  ownerId         String
+  priority        String   @default("P2") // P0, P1, P2, P3 (legacy, still used for quick reference)
+  status          String   @default("NOT_STARTED") // NOT_STARTED, IN_PROGRESS, BLOCKED, DONE
+  progressPercent Int      @default(0)
+  dueDate         DateTime? // Legacy field - now use internalDeadline
+  blockerNotes    String?
+  currentFocus    Boolean  @default(false)
+  lastCheckinAt   DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // ===== 4-FACTOR PRIORITIZATION GRID =====
+  // Factor 1: URGENCY (how immediate is it) 1-5
+  urgencyLevel       Int      @default(3)
+  // Factor 2: IMPORTANCE (how much it matters to business outcomes) 1-5
+  importanceLevel    Int      @default(3)
+  // Factor 3: DEADLINES
+  internalDeadline   DateTime?
+  externalClientDeadline DateTime? // Client-facing deadline (nullable)
+  // Factor 4: DURABILITY / DURATION
+  estimatedDuration  String   @default("M") // XS (<1h), S (1-4h), M (4-8h), L (1-3d), XL (3d+)
+  durabilityCategory String   @default("SHORT") // SHORT (<1d), MEDIUM (1-5d), LONG (5d+)
+
+  // ===== COMPLEXITY & ASSIGNMENT =====
+  complexityLevel    Int      @default(3) // 1-5
+  skillTags          String?  // Comma-separated: "Sales,Web,AI,Ops,Design,Legal,Finance"
+  reviewerIds        String?  // Comma-separated member IDs for reviewers
+  collaboratorIds    String?  // Comma-separated member IDs for collaborators
+  requiresMultiHand  Boolean  @default(false) // Flagged for multi-person analysis
+
+  // ===== ASSIGNMENT RECOMMENDATION (AI/Rule-based) =====
+  recommendedOwnerId    String?  // System-suggested owner
+  recommendedCadence    String?  // HOURLY, DAILY, WEEKLY
+  recommendedPlan       String?  // JSON: ["action1", "action2", "action3"]
+  assignmentConfidence  Float?   // 0-1 confidence in recommendation
+
+  // ===== MANAGER ATTENTION FLAGS =====
+  flaggedImmediate      Boolean  @default(false) // "Immediate Attention" flag
+  pinnedByManager       Boolean  @default(false) // Manager pinned for morning focus
+  managerNotes          String?  // Private manager notes
+
+  owner           Member   @relation(fields: [ownerId], references: [id])
+  timeEntries     TimeEntry[]
+  meetingResponses MeetingResponse[]
+  aiCheckins      AICheckin[]
+}
+
+// Meetings
+model Meeting {
+  id           String   @id @default(cuid())
+  type         String   // DAILY_STANDUP, WEEKLY_PLANNING, MONTHLY_REVIEW
+  title        String?
+  startTime    DateTime @default(now())
+  endTime      DateTime?
+  createdById  String
+  notesSummary String?
+  status       String   @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  createdBy    Member   @relation(fields: [createdById], references: [id])
+  responses    MeetingResponse[]
+}
+
+// Meeting Responses (Standup Notes)
+model MeetingResponse {
+  id                    String   @id @default(cuid())
+  meetingId             String
+  memberId              String
+  whatImDoingNow        String?
+  topPriorityTaskId     String?
+  statusUpdate          String?
+  progressPercentUpdate Int?
+  blockers              String?
+  nextActions           String?
+  confidence            Int?     // 1-5
+  submittedAt           DateTime @default(now())
+
+  meeting               Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  member                Member   @relation(fields: [memberId], references: [id])
+  topPriorityTask       Task?    @relation(fields: [topPriorityTaskId], references: [id])
+}
+
+// Time Entries
+model TimeEntry {
+  id              String   @id @default(cuid())
+  memberId        String
+  taskId          String?
+  date            DateTime
+  durationMinutes Int
+  category        String   @default("INTERNAL") // CLIENT_WORK, INTERNAL, SALES, R_AND_D, ADMIN
+  billable        Boolean  @default(false)
+  hourlyRate      Float?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  member          Member   @relation(fields: [memberId], references: [id])
+  task            Task?    @relation(fields: [taskId], references: [id])
+}
+
+// Monthly Reports
+model MonthlyReport {
+  id                  String   @id @default(cuid())
+  month               String   // YYYY-MM
+  memberId            String
+  totalHours          Float    @default(0)
+  billableHours       Float    @default(0)
+  valueGenerated      Float    @default(0)
+  tasksCompleted      Int      @default(0)
+  tasksAssigned       Int      @default(0)
+  onTimeRate          Float    @default(0)
+  deliveryScore       Float    @default(0)
+  progressScore       Float    @default(0)
+  improvementScore    Float    @default(0)
+  performanceScore    Float    @default(0)
+  bonusAmount         Float    @default(0)
+  rank                Int?
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  member              Member   @relation(fields: [memberId], references: [id])
+
+  @@unique([month, memberId])
+}
+
+// Notifications (SMS/Email Log)
+model Notification {
+  id          String   @id @default(cuid())
+  memberId    String
+  type        String   // OVERDUE_ALERT, MEETING_REMINDER, PROGRESS_UPDATE, ACHIEVEMENT, LEADERBOARD
+  channel     String   // SMS, EMAIL, IN_APP
+  subject     String
+  message     String
+  status      String   @default("PENDING") // PENDING, SENT, FAILED
+  sentAt      DateTime?
+  sentById    String?
+  createdAt   DateTime @default(now())
+
+  member      Member   @relation(fields: [memberId], references: [id])
+  sentBy      Member?  @relation("SentBy", fields: [sentById], references: [id])
+}
+
+// System Settings
+model Setting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  category    String   @default("general")
+  updatedAt   DateTime @updatedAt
+}
+
+// AI Check-ins (Voice/Video Reports)
+model AICheckin {
+  id                String   @id @default(cuid())
+  memberId          String
+  taskId            String?
+  type              String   // VOICE, VIDEO, TEXT
+  mediaUrl          String?  // URL to stored audio/video
+  thumbnailUrl      String?  // Thumbnail for video
+  durationSeconds   Int?
+  transcription     String?  // Whisper transcription
+  aiSummary         String?  // GPT-generated summary
+  aiReport          String?  // Full AI-generated report
+  extractedProgress Int?     // AI-detected progress %
+  extractedBlockers String?  // AI-detected blockers
+  extractedNextSteps String? // AI-detected next steps
+  sentiment         String?  // POSITIVE, NEUTRAL, NEGATIVE
+  confidence        Float?   // AI confidence score
+  processedAt       DateTime?
+  createdAt         DateTime @default(now())
+
+  member            Member   @relation(fields: [memberId], references: [id])
+  task              Task?    @relation(fields: [taskId], references: [id])
+  attachments       CheckinAttachment[]
+}
+
+// Attachments for check-ins (screenshots, images)
+model CheckinAttachment {
+  id          String   @id @default(cuid())
+  checkinId   String
+  type        String   // IMAGE, SCREENSHOT, DOCUMENT
+  url         String
+  caption     String?
+  aiAnalysis  String?  // GPT-4 Vision analysis
+  createdAt   DateTime @default(now())
+
+  checkin     AICheckin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
+}
+
+// Jarvis Conversations
+model JarvisConversation {
+  id          String   @id @default(cuid())
+  memberId    String?
+  sessionId   String
+  role        String   // USER, ASSISTANT, SYSTEM
+  content     String
+  audioUrl    String?  // For voice messages
+  functionCall String? // JSON of function call made
+  functionResult String? // JSON of function result
+  createdAt   DateTime @default(now())
+
+  member      Member?  @relation(fields: [memberId], references: [id])
+}
+
+// Auto Alerts Configuration
+model AutoAlert {
+  id          String   @id @default(cuid())
+  name        String
+  type        String   // TASK_OVERDUE, PROGRESS_STALL, DAILY_REMINDER, WEEKLY_SUMMARY
+  conditions  String   // JSON conditions
+  message     String   // Template message
+  channels    String   // SMS,EMAIL,IN_APP
+  isActive    Boolean  @default(true)
+  lastRunAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ===== DAILY MANAGER SUMMARY (Nightly Generation) =====
+model DailySummary {
+  id                String   @id @default(cuid())
+  date              String   // YYYY-MM-DD
+  managerId         String
+
+  // Section 1: What was completed today
+  completedTasks    String?  // JSON array: [{taskId, title, memberName, completedAt}]
+  completedCount    Int      @default(0)
+
+  // Section 2: Progress changes today
+  progressUpdates   String?  // JSON array: [{taskId, title, memberName, oldProgress, newProgress}]
+  progressCount     Int      @default(0)
+
+  // Section 3: What's blocked
+  blockedTasks      String?  // JSON array: [{taskId, title, memberName, blockerNotes}]
+  blockedCount      Int      @default(0)
+
+  // Section 4: What becomes urgent tomorrow
+  urgentTomorrow    String?  // JSON array: [{taskId, title, dueDate, isClientDeadline, memberName}]
+  urgentCount       Int      @default(0)
+
+  // Section 5: Manager actions required
+  managerActions    String?  // JSON array: [{type, description, taskId?, memberId?, priority}]
+  actionsCount      Int      @default(0)
+
+  // Hours summary
+  totalHoursLogged  Float    @default(0)
+  billableHours     Float    @default(0)
+  memberHours       String?  // JSON: {memberId: hours, ...}
+
+  // AI-generated narrative summary
+  narrativeSummary  String?  // Human-readable summary text
+
+  // Meta
+  generatedAt       DateTime @default(now())
+  sentViaEmail      Boolean  @default(false)
+  emailSentAt       DateTime?
+
+  manager           Member   @relation(fields: [managerId], references: [id])
+
+  @@unique([date, managerId])
+}
+
+// ===== PINNED FOCUS ITEMS (Morning Reminders) =====
+model PinnedFocusItem {
+  id          String   @id @default(cuid())
+  memberId    String
+  taskId      String?
+
+  // What to focus on
+  focusType   String   // TASK, CLIENT_DEADLINE, BLOCKED_ESCALATION, CROSS_CHECK, CUSTOM
+  title       String
+  description String?
+  priority    Int      @default(1) // 1 = highest priority
+
+  // Source of the pin
+  source      String   @default("MANUAL") // MANUAL, AUTO_GENERATED, NIGHTLY_SUMMARY
+
+  // Reminder settings
+  remindAt    DateTime?
+  reminded    Boolean  @default(false)
+
+  // Status
+  completed   Boolean  @default(false)
+  completedAt DateTime?
+
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime? // Auto-remove after this date
+
+  member      Member   @relation(fields: [memberId], references: [id])
+}
+
+// ===== VIRTUAL OFFICE =====
+
+// Workspots - Personal desk/workspace for each member
+model Workspot {
+  id          String   @id @default(cuid())
+  memberId    String   @unique
+
+  // Position in the office grid
+  gridX       Int      @default(0)
+  gridY       Int      @default(0)
+
+  // Desk customization
+  deskStyle   String   @default("modern") // modern, classic, minimal, creative
+  wallItems   String?  // JSON: [{type: "photo", url: "..."}, {type: "plant", id: 1}]
+  deskItems   String?  // JSON: [{type: "laptop", color: "silver"}, {type: "mug", id: 2}]
+
+  // Personal touches
+  nameplate   String?  // Custom nameplate text
+  background  String   @default("default") // Background/wall color
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  member      Member   @relation(fields: [memberId], references: [id])
+}
+
+// Office Zones - Different areas in the virtual office
+model OfficeZone {
+  id          String   @id @default(cuid())
+  name        String   // "Meeting Room A", "Lounge", "Coffee Area"
+  type        String   // MEETING_ROOM, LOUNGE, WORK_AREA, BREAK_ROOM, LOBBY
+
+  // Position and size in office
+  gridX       Int
+  gridY       Int
+  width       Int      @default(3)
+  height      Int      @default(3)
+
+  // Zone appearance
+  style       String   @default("default")
+  icon        String?
+  color       String   @default("#E0E7FF")
+
+  // Capacity
+  maxOccupants Int     @default(10)
+
+  // For meeting rooms
+  isBookable  Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+}
+
+// Office Messages - Quick messages/memos left at desks
+model OfficeMessage {
+  id          String   @id @default(cuid())
+  fromId      String
+  toId        String
+
+  message     String
+  type        String   @default("NOTE") // NOTE, WAVE, COFFEE_INVITE, QUICK_CHAT
+
+  // If left at someone's desk while they're away
+  leftAtDesk  Boolean  @default(false)
+
+  read        Boolean  @default(false)
+  readAt      DateTime?
+
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime? // Auto-delete after this time
+
+  from        Member   @relation("SentMessages", fields: [fromId], references: [id])
+  to          Member   @relation("ReceivedMessages", fields: [toId], references: [id])
+}
+
+// Office Activity Log - Track what's happening in the office
+model OfficeActivity {
+  id          String   @id @default(cuid())
+  memberId    String?
+
+  type        String   // JOINED, LEFT, MOVED, STATUS_CHANGE, ZONE_ENTER, ZONE_EXIT
+  details     String?  // JSON with additional info
+
+  zoneId      String?
+  zoneName    String?
+
+  createdAt   DateTime @default(now())
+}
